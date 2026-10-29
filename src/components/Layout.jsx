@@ -126,7 +126,8 @@ export function Header() {
   );
 }
 export function Footer() {
-  const instagram = import.meta.env.VITE_INSTAGRAM_URL;
+  const instagram =
+    import.meta.env.VITE_INSTAGRAM_URL || 'https://www.instagram.com/bella_crochetofficial';
   let insta = '';
   try {
     const u = new URL(instagram);
