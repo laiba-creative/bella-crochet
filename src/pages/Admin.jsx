@@ -76,9 +76,6 @@ export default function Admin() {
   );
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [code, setCode] = useState('');
-  const [factor, setFactor] = useState(null);
-  const [qr, setQr] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState('overview');
@@ -93,9 +90,6 @@ export default function Admin() {
     setTab('overview');
     setIdentity('');
     setPassword('');
-    setCode('');
-    setQr('');
-    setFactor(null);
     userId.current = null;
 
     try {
@@ -117,10 +111,8 @@ export default function Admin() {
         return;
       }
 
-      const {
-        data: member,
-        error: memberError,
-      } = await supabase.rpc('is_admin_member');
+      const { data: member, error: memberError } =
+        await supabase.rpc('is_admin_member');
 
       if (memberError || !member) {
         await supabase.auth.signOut();
@@ -137,47 +129,25 @@ export default function Admin() {
 
       setIdentity(user.email || 'Authorised administrator');
 
-      const {
-        data: aal,
-        error: assuranceError,
-      } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      const { data: allowed, error: accessError } =
+        await supabase.rpc('is_admin');
 
-      if (assuranceError) throw assuranceError;
-
-      const {
-        data: allowed,
-        error: accessError,
-      } = await supabase.rpc('is_admin');
-
-      if (!accessError && allowed && aal.currentLevel === 'aal2') {
-        setQr('');
-        setCode('');
-        setPhase('ready');
-        return;
+      if (accessError || !allowed) {
+        throw accessError || new Error('Not allowed');
       }
 
-      const {
-        data: factors,
-        error: factorError,
-      } = await supabase.auth.mfa.listFactors();
+      setPhase('ready');
+    } catch (err) {
+    console.error('Admin access verification failed:', err);
 
-      if (factorError) throw factorError;
-
-      const verified = factors.all?.find(
-        (item) =>
-          item.factor_type === 'totp' &&
-          item.status === 'verified',
-      );
-
-      setFactor(verified?.id || null);
-      setPhase(verified ? 'verify' : 'enrol');
-    } catch {
-      setError(
+    setError(
+      err?.message ||
         'Unable to verify access. Check the database setup and sign in again.',
-      );
-      setPhase('login');
-    }
-  }, []);
+    );
+
+    setPhase('login');
+  }
+}, []);
 
   useEffect(() => {
     if (!configured) return;
@@ -190,8 +160,6 @@ export default function Admin() {
       if (event === 'SIGNED_OUT') {
         setPhase('login');
         setIdentity('');
-        setQr('');
-        setCode('');
       } else if (event === 'TOKEN_REFRESHED') {
         setTimeout(() => inspect(), 0);
       }
@@ -201,7 +169,7 @@ export default function Admin() {
   }, [inspect]);
 
   useEffect(() => {
-    if (!['ready', 'verify', 'enrol'].includes(phase)) return;
+    if (phase !== 'ready') return;
 
     const touch = () => {
       lastActive.current = Date.now();
@@ -278,73 +246,6 @@ export default function Admin() {
     }
   }
 
-  async function enrol() {
-    setBusy(true);
-    setError('');
-
-    try {
-      const { data: oldFactors } =
-        await supabase.auth.mfa.listFactors();
-
-      for (const item of oldFactors?.all || []) {
-        if (
-          item.factor_type === 'totp' &&
-          item.status === 'unverified'
-        ) {
-          await supabase.auth.mfa.unenroll({
-            factorId: item.id,
-          });
-        }
-      }
-
-      const {
-        data,
-        error: enrolError,
-      } = await supabase.auth.mfa.enroll({
-        factorType: 'totp',
-        friendlyName: `Bella Admin ${Date.now()}`,
-        issuer: 'Bella Crochet',
-      });
-
-      if (enrolError) throw enrolError;
-
-      setFactor(data.id);
-      setQr(data.totp.qr_code);
-    } catch {
-      setError(
-        'Unable to enrol an authenticator. Try again or contact the project owner.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function verify(event) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-
-    try {
-      const { error: verifyError } =
-        await supabase.auth.mfa.challengeAndVerify({
-          factorId: factor,
-          code,
-        });
-
-      if (verifyError) throw verifyError;
-
-      setCode('');
-      await inspect();
-    } catch {
-      setCode('');
-      setError(
-        'That code could not be verified. Please try a current code.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
   if (phase !== 'ready') {
     return (
       <main className="admin-login">
@@ -376,7 +277,7 @@ export default function Admin() {
             </>
           ) : phase === 'checking' ? (
             <p role="status">Verifying access…</p>
-          ) : phase === 'login' ? (
+          ) : (
             <>
               <h1>Welcome back.</h1>
 
@@ -412,85 +313,13 @@ export default function Admin() {
                 </label>
 
                 <button className="button" disabled={busy}>
-                  {busy ? 'Signing in…' : 'Continue securely'}
+                  {busy ? 'Signing in…' : 'Sign in'}
                 </button>
               </form>
 
               <small>
-                Authenticator verification is required before accessing
-                records. Account recovery is handled by the project
-                owner.
+                Account recovery is handled by the project owner.
               </small>
-            </>
-          ) : (
-            <>
-              <h1>
-                {phase === 'enrol'
-                  ? 'Add your second factor.'
-                  : 'Verify it’s you.'}
-              </h1>
-
-              <p>
-                {phase === 'enrol'
-                  ? 'Use your own authenticator app. Keep your recovery arrangements with the project owner.'
-                  : 'Enter the current code from your authenticator app.'}
-              </p>
-
-              {phase === 'enrol' && !qr && (
-                <button
-                  className="button"
-                  onClick={enrol}
-                  disabled={busy}
-                >
-                  Set up authenticator
-                </button>
-              )}
-
-              {qr && (
-                <>
-                  <img
-                    className="mfa-qr"
-                    src={qr}
-                    alt="Scan this QR code using your authenticator app"
-                  />
-
-                  <small>
-                    Do not share or screenshot this setup code.
-                  </small>
-                </>
-              )}
-
-              {factor && (
-                <form onSubmit={verify}>
-                  <label>
-                    Six-digit code
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      autoComplete="one-time-code"
-                      pattern="[0-9]{6}"
-                      maxLength={6}
-                      required
-                      value={code}
-                      onChange={(event) =>
-                        setCode(
-                          event.target.value.replace(/\D/g, ''),
-                        )
-                      }
-                    />
-                  </label>
-
-                  <button className="button" disabled={busy}>
-                    {busy
-                      ? 'Verifying…'
-                      : 'Verify & open dashboard'}
-                  </button>
-                </form>
-              )}
-
-              <button className="text-link" onClick={signout}>
-                Sign out
-              </button>
             </>
           )}
 
@@ -543,11 +372,6 @@ export default function Admin() {
             <small>Bella Crochet / Workspace</small>
             <h1>{tabs.find((item) => item[0] === tab)?.[1]}</h1>
           </div>
-
-          <span className="verified">
-            <ShieldCheck size={16} />
-            MFA verified
-          </span>
         </header>
 
         <div className="admin-content">
@@ -807,7 +631,7 @@ function AdminContent({ tab, identity, signout }) {
       );
     } catch {
       setError(
-        'Retention action failed. Check your verified session before retrying.',
+        'Retention action failed. Check your session before retrying.',
       );
     } finally {
       setBusy(false);
@@ -934,8 +758,7 @@ function AdminContent({ tab, identity, signout }) {
 
                 <p>
                   Signed in as {identity}. Administrator
-                  membership and authenticator verification are
-                  enforced by database policies.
+                  membership is enforced by database policies.
                 </p>
 
                 <p>

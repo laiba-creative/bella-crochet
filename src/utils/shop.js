@@ -31,15 +31,22 @@ export const SIZES = [
 ];
 
 export function sizeOptions(product) {
-  const sizes = product?.sizes;
+  const sizes = Array.isArray(product?.sizes)
+    ? product.sizes
+        .filter(
+          (size) =>
+            typeof size === 'string' && size.trim().length,
+        )
+        .map((size) => size.trim())
+    : [];
 
-  if (!Array.isArray(sizes) || sizes.includes('Standard')) {
-    return ['Standard'];
+  if (!sizes.length) {
+    return product?.custom_size === true || product?.custom_size === undefined
+      ? ['Standard', 'Custom size']
+      : ['Standard'];
   }
 
-  return ['Small', 'Medium', 'Large'].filter((size) =>
-    sizes.includes(size),
-  );
+  return [...new Set(sizes)];
 }
 
 export function sizePrice(product, size) {
@@ -47,10 +54,19 @@ export function sizePrice(product, size) {
     return null;
   }
 
+  const customSizeAllowed =
+    product.custom_size !== false ||
+    (Array.isArray(product.sizes) &&
+      product.sizes.includes('Custom size'));
+
   const value =
     size === 'Standard'
       ? product.price
-      : product.size_prices?.[size];
+      : size === 'Custom size'
+        ? customSizeAllowed
+          ? product.size_prices?.['Custom size'] ?? product.price
+          : null
+        : product.size_prices?.[size];
 
   if (
     value === null ||
@@ -101,6 +117,7 @@ export function whatsappMessage(items, products) {
   let total = 0;
   let incomplete = false;
   let customColour = false;
+  let customSize = false;
   let count = 0;
 
   for (const item of items) {
@@ -123,6 +140,7 @@ export function whatsappMessage(items, products) {
     }
 
     customColour ||= item.colour === 'Custom colour';
+    customSize ||= item.size === 'Custom size';
 
     lines.push(
       `${++count}. ${product.name}`,
@@ -174,8 +192,10 @@ export function whatsappMessage(items, products) {
     );
   }
 
-  if (customColour) {
-    lines.push('Please quote any custom colour changes.');
+  if (customColour || customSize) {
+    lines.push(
+      'Please quote any custom size or colour changes.',
+    );
   }
 
   lines.push(
